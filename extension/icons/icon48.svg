@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-label="Canvas Transcript Companion">
+  <rect width="48" height="48" rx="9" fill="#0f172a"/>
+  <rect x="10" y="11" width="28" height="20" rx="3" fill="#e0f2fe"/>
+  <path d="M16 17h16M16 22h16M16 27h10" stroke="#0f172a" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M31 35l5-3v6l-5-3Z" fill="#38bdf8"/>
+</svg>
