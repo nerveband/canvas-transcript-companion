@@ -2,6 +2,8 @@
 
 A Chrome extension that adds a synced, clickable transcript panel to Canvas video pages when captions are available. Built for Canvas Studio / Arc embeds on `*.instructure.com`, `*.instructuremedia.com`, and `*.canvaslms.com`.
 
+![Panel mode — transcript beside each Canvas Studio video](docs/screenshots/01-panel-mode.jpg)
+
 ## Features
 
 - **Synced transcript panel** — appears next to or below the embedded video, populated from the video's text tracks or fetched WebVTT/SRT.
@@ -39,6 +41,14 @@ Until this is published to the Chrome Web Store, install it as an unpacked exten
   - **Float** mode lets you drag the transcript by its title bar and resize from the corner.
   - **Opacity** icon (circle-half) opens a slider so the transcript can fade into the background.
   - **Red X** in the top-right closes theater. **Esc** also closes it.
+
+### Theater mode — docked right (default)
+
+![Theater mode docked to the right of the video](docs/screenshots/02-theater-right.jpg)
+
+### Theater mode — floating, with opacity slider
+
+![Floating transcript with the opacity slider popover open](docs/screenshots/03-theater-floating-opacity.jpg)
 
 ## How it works
 
