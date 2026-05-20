@@ -15,6 +15,7 @@
   };
 
   const panelStates = new Map();
+  const pendingSupplements = new Map();
   let videoState = null;
   let transcriptSent = false;
   const pendingCaptionUrls = new Set();
@@ -63,6 +64,10 @@
         renderPanel(event.source, data.payload);
       }
 
+      if (data.type === "transcript-supplement") {
+        applyTranscriptSupplement(data.payload);
+      }
+
       if (data.type === "time-update") {
         updateActiveCue(data.payload.currentTime, data.payload.frameId);
       }
@@ -107,13 +112,114 @@
     return document.querySelector(sel);
   }
 
+  async function primeStudioPerspective() {
+    const ctx = await getStudioPerspectiveAuth();
+    if (!ctx) return;
+    const { perspectiveId, auth } = ctx;
+
+    fetchStudioQuestionFrames(perspectiveId, auth).then((questionFrames) => {
+      if (!questionFrames?.length) return;
+      videoState.questionFrames = questionFrames;
+      trace("studio-question-frames-loaded", { count: questionFrames.length });
+      postFrameStatus("studio-questions-loaded", { count: questionFrames.length });
+      postToTop("transcript-supplement", {
+        frameId: FRAME_ID,
+        questionFrames
+      });
+    }).catch((e) => trace("studio-question-frames-error", { error: e?.message }));
+
+    if (transcriptSent) return;
+
+    fetchStudioCuesViaPerspective(perspectiveId, auth).then((studio) => {
+      if (!studio?.cues?.length || transcriptSent) return;
+      sendTranscriptReady(studio.cues, "studio-perspective", {
+        questionFrames: videoState.questionFrames,
+        title: studio.title
+      });
+    }).catch((e) => trace("studio-cues-error", { error: e?.message }));
+  }
+
+  async function getStudioPerspectiveAuth() {
+    if (!/instructuremedia\.com$/.test(location.hostname)) return null;
+    const match = location.pathname.match(/\/lti-app\/embed\/perspective\/([^/?#]+)/);
+    if (!match) return null;
+    const perspectiveId = match[1];
+
+    let userId, token;
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      try {
+        userId = sessionStorage.getItem("userId");
+        token = sessionStorage.getItem("token");
+      } catch {}
+      if (userId && token) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!userId || !token) {
+      trace("studio-no-session", { perspectiveId });
+      return null;
+    }
+    return { perspectiveId, auth: `Bearer user_id="${userId}", token="${token}"` };
+  }
+
+  async function fetchStudioQuestionFrames(perspectiveId, auth) {
+    const r = await fetch(`/api/media_management/perspectives/${perspectiveId}/participant_sessions`, {
+      method: "POST",
+      headers: { Authorization: auth, Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}"
+    });
+    if (!r.ok) {
+      trace("studio-participant-sessions-failed", { status: r.status });
+      return [];
+    }
+    const data = await r.json();
+    const frames = data?.participant_session?.question_frames || [];
+    return frames
+      .map((f) => ({ time: Number(f.time) }))
+      .filter((f) => Number.isFinite(f.time))
+      .sort((a, b) => a.time - b.time);
+  }
+
+  async function fetchStudioCuesViaPerspective(perspectiveId, auth) {
+    const opts = { headers: { Authorization: auth, Accept: "application/json" } };
+    const pr = await fetch(`/api/media_management/perspectives/${perspectiveId}?include[]=tags`, opts);
+    if (!pr.ok) return null;
+    const perspective = (await pr.json()).perspective;
+    if (!perspective?.has_captions || !perspective?.media?.id) return null;
+
+    const cr = await fetch(`/api/media_management/media/${perspective.media.id}/caption_files`, opts);
+    if (!cr.ok) return null;
+    const list = (await cr.json()).caption_files || [];
+    const captionFile = list.find((c) => c.srclang === "en" && c.status === "published")
+      || list.find((c) => c.srclang === "en")
+      || list.find((c) => c.status === "published")
+      || list[0];
+    if (!captionFile?.id) return null;
+
+    const fr = await fetch(`/api/media_management/caption_files/${captionFile.id}.json`);
+    if (!fr.ok) return null;
+    const parsed = (await fr.json()).caption_file;
+    const cues = (parsed?.sequences || [])
+      .filter((s) => Number.isFinite(s.start_time))
+      .map((s) => ({
+        start: Number(s.start_time),
+        end: Number.isFinite(s.end_time) ? Number(s.end_time) : Number(s.start_time) + 3,
+        text: cleanCueText(String(s.text || ""))
+      }))
+      .filter((cue) => cue.text);
+    if (!cues.length) return null;
+    return { cues: dedupeAndSort(cues), title: perspective.title };
+  }
+
   async function initializeVideoBridge(video) {
     if (video.dataset.ctcReady === "true") return;
     video.dataset.ctcReady = "true";
 
-    videoState = { video, cues: [], lastSentSecond: -1 };
+    videoState = { video, cues: [], lastSentSecond: -1, questionFrames: [] };
     trace("video-initialize", inspectVideo(video));
     wireSeekReceiver(video);
+
+    primeStudioPerspective();
 
     const cues = await collectCues(video);
     if (!cues.length) {
@@ -121,7 +227,6 @@
       postFrameStatus("no-cues", inspectVideo(video));
       return;
     }
-
     sendTranscriptReady(cues, "initial-collection");
 
     video.addEventListener("timeupdate", () => {
@@ -540,20 +645,22 @@
     });
   }
 
-  function sendTranscriptReady(cues, reason) {
+  function sendTranscriptReady(cues, reason, extras = {}) {
     if (!videoState || (!videoState.video && !videoState.iframe) || transcriptSent || !cues.length) return;
 
     transcriptSent = true;
     videoState.cues = cues;
     const rawDuration = videoState.video?.duration ?? videoState.duration;
     const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null;
-    trace("cues-ready", { reason, count: cues.length, first: cues[0], last: cues[cues.length - 1] });
-    postFrameStatus("cues-ready", { reason, count: cues.length, duration });
+    const questionFrames = Array.isArray(extras.questionFrames) ? extras.questionFrames : [];
+    trace("cues-ready", { reason, count: cues.length, first: cues[0], last: cues[cues.length - 1], questionCount: questionFrames.length });
+    postFrameStatus("cues-ready", { reason, count: cues.length, duration, questionCount: questionFrames.length });
     postToTop("transcript-ready", {
       frameId: FRAME_ID,
-      title: document.title || ariaVideoTitle() || "Video transcript",
+      title: extras.title || document.title || ariaVideoTitle() || "Video transcript",
       cues,
-      duration
+      duration,
+      questionFrames
     });
   }
 
@@ -622,14 +729,65 @@
     state.cues = payload.cues;
     state.segments = segments;
     state.videoTitle = videoTitle;
+    state.questionFrames = Array.isArray(payload.questionFrames) ? payload.questionFrames : [];
     panelStates.set(payload.frameId, state);
     const waitingId = waitingFrameIdForTarget(target, findCanvasVideoTargets().indexOf(target));
     if (panelStates.get(waitingId)?.shell === shell) panelStates.delete(waitingId);
     shell.ctcState = state;
+    flushSupplements(state);
+    renderQuestionMarkers(shell, state);
     list.append(buildTranscriptFragment(state));
 
     wirePanelControls(shell, state);
     refreshDiagnostics(shell, state);
+  }
+
+  function applyTranscriptSupplement(payload) {
+    if (!payload?.frameId) return;
+    if (Array.isArray(payload.questionFrames) && payload.questionFrames.length) {
+      const merged = pendingSupplements.get(payload.frameId) || {};
+      merged.questionFrames = payload.questionFrames;
+      pendingSupplements.set(payload.frameId, merged);
+    }
+    const state = panelStates.get(payload.frameId);
+    if (state?.shell) flushSupplements(state);
+  }
+
+  function flushSupplements(state) {
+    const supplement = pendingSupplements.get(state.frameId);
+    if (!supplement) return;
+    if (Array.isArray(supplement.questionFrames) && supplement.questionFrames.length) {
+      state.questionFrames = supplement.questionFrames;
+      renderQuestionMarkers(state.shell, state);
+    }
+  }
+
+  function renderQuestionMarkers(shell, state) {
+    const existing = shell.querySelector(".ctc-question-strip");
+    if (existing) existing.remove();
+    const frames = state?.questionFrames || [];
+    if (!frames.length) return;
+
+    const strip = document.createElement("div");
+    strip.className = "ctc-question-strip";
+    const label = document.createElement("span");
+    label.className = "ctc-question-strip-label";
+    label.textContent = `${frames.length} quiz ${frames.length === 1 ? "question" : "questions"}:`;
+    strip.append(label);
+
+    frames.forEach((frame, i) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "ctc-question-chip";
+      chip.dataset.time = String(frame.time);
+      chip.textContent = `Q${i + 1} ${formatTime(frame.time)}`;
+      chip.setAttribute("aria-label", `Jump to question ${i + 1} at ${formatTime(frame.time)}`);
+      chip.addEventListener("click", () => seekToSegment(state, frame.time));
+      strip.append(chip);
+    });
+
+    const list = shell.querySelector(".ctc-list");
+    shell.insertBefore(strip, list);
   }
 
   function createShell() {
@@ -1404,6 +1562,8 @@
     return Array.from(document.querySelectorAll([
       'iframe[src*="instructuremedia.com"]',
       'iframe[src*="external_tools/retrieve"][src*="custom_arc_media_id"]',
+      'iframe[data-lti-launch="true"]',
+      'iframe[id^="tool_content_"]',
       "video"
     ].join(","))).filter((target) => !target.closest(".ctc-shell"));
   }

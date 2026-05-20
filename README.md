@@ -16,7 +16,7 @@ A Chrome extension that adds a synced, clickable transcript panel to Canvas vide
   - made **transparent** via an opacity slider hidden behind an icon
   - **collapsed** to its title bar
 - **Copy transcript** — one-click copy of the entire transcript.
-- **Local diagnostics** — built-in debug panel for troubleshooting cue extraction and frame messaging.
+- **Local diagnostics** — opt-in troubleshooting mode for cue extraction and frame messaging.
 
 No telemetry. Everything runs locally in your browser.
 
@@ -60,14 +60,26 @@ The architecture is per-frame and per-video, so multiple Studio embeds on one pa
 
 ## Diagnostics
 
-Click **Debug** in the transcript panel to open the diagnostics view. It shows:
+Diagnostics are hidden from the normal student-facing UI. To turn them on while developing, add `?ctcDebug=1` to the Canvas URL or run this in the page console:
+
+```js
+localStorage.setItem("ctcDebug", "1");
+```
+
+When diagnostics are enabled, the extension can show:
 
 - Whether the top Canvas page saw Studio/video frames.
 - Whether the video frame found a `<video>`, text tracks, and cue counts.
 - Recent caption/transcript-related network hints.
 - Recent extension events.
 
-For noisy console logging, add `?ctcDebug=1` to the URL or run `localStorage.setItem("ctcDebug", "1")` in the page console. Diagnostics are local-only; nothing is sent off-device.
+Diagnostics are local-only; nothing is sent off-device.
+
+To turn diagnostics back off:
+
+```js
+localStorage.removeItem("ctcDebug");
+```
 
 ## Known limitations
 
@@ -88,6 +100,24 @@ extension/
 ```
 
 There is no build step. Edit the files, then click **Reload** for the extension at `chrome://extensions` and refresh the Canvas tab.
+
+## Chrome Web Store prep
+
+Publishing materials live in:
+
+- `docs/chrome-web-store/listing.md` — store listing copy, permission justifications, and data-use answers.
+- `docs/chrome-web-store/privacy-policy.md` — public privacy policy draft.
+- `docs/chrome-web-store/reviewer-notes.md` — reviewer test notes.
+- `store-assets/screenshots/` — 1280x800 screenshots for the listing.
+- `store-assets/promotional/` — exact-size promotional tiles.
+
+Build the upload zip with:
+
+```sh
+./scripts/package-extension.sh
+```
+
+The script creates `canvas-transcript-companion-v0.1.0.zip` with `manifest.json` at the zip root.
 
 ## License
 

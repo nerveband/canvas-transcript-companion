@@ -242,8 +242,48 @@
 
 .ctc-shell.is-collapsed .ctc-status,
 .ctc-shell.is-collapsed .ctc-list,
+.ctc-shell.is-collapsed .ctc-question-strip,
 .ctc-shell.is-collapsed .ctc-debug-panel {
   display: none;
+}
+
+.ctc-question-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ctc-line);
+  background: #fff7ed;
+  color: #7c2d12;
+  font-size: 12px;
+}
+
+.ctc-question-strip-label {
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.ctc-question-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid #fdba74;
+  border-radius: 999px;
+  background: #ffedd5;
+  color: #7c2d12;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ctc-question-chip:hover,
+.ctc-question-chip:focus-visible {
+  background: #fed7aa;
+  border-color: #fb923c;
+  outline: none;
 }
 
 .ctc-debug-panel {

@@ -2,14 +2,12 @@
   "manifest_version": 3,
   "name": "Canvas Transcript Companion",
   "description": "Adds a synced, clickable transcript panel to Canvas video pages when captions are available.",
-  "version": "0.1.0",
-  "permissions": ["storage"],
+  "version": "0.2.0",
   "host_permissions": [
     "https://*.instructure.com/*",
     "https://*.instructuremedia.com/*",
     "https://*.canvaslms.com/*"
   ],
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
   "content_scripts": [
     {
       "matches": [
@@ -35,8 +33,8 @@
     }
   ],
   "icons": {
-    "16": "icons/icon16.svg",
-    "48": "icons/icon48.svg",
-    "128": "icons/icon128.svg"
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }
