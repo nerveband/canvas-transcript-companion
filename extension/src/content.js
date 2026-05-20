@@ -83,15 +83,28 @@
 
   function bootVideoFrame() {
     const start = () => {
+      if (videoState) return;
       const video = document.querySelector("video");
-      if (!video) return;
-      postFrameStatus("video-found", inspectVideo(video));
-      initializeVideoBridge(video);
+      if (video) {
+        postFrameStatus("video-found", inspectVideo(video));
+        initializeVideoBridge(video);
+        return;
+      }
+      const yt = findYouTubeIframe();
+      if (yt) {
+        postFrameStatus("youtube-found", { src: yt.src });
+        initializeYouTubeBridge(yt);
+      }
     };
 
     start();
     const observer = new MutationObserver(start);
     observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  function findYouTubeIframe() {
+    const sel = 'iframe[src*="youtube.com/embed/"], iframe[src*="youtube-nocookie.com/embed/"]';
+    return document.querySelector(sel);
   }
 
   async function initializeVideoBridge(video) {
@@ -141,6 +154,77 @@
       setTimeout(apply, 120);
       setTimeout(apply, 400);
     });
+  }
+
+  async function initializeYouTubeBridge(iframe) {
+    if (iframe.dataset.ctcReady === "true") return;
+    iframe.dataset.ctcReady = "true";
+
+    videoState = { iframe, cues: [], lastSentSecond: -1, duration: null };
+    trace("youtube-initialize", { src: iframe.src });
+
+    const post = (msg) => {
+      try { iframe.contentWindow?.postMessage(JSON.stringify(msg), "*"); } catch {}
+    };
+    const subscribe = () => {
+      post({ event: "listening", id: FRAME_ID, channel: "widget" });
+      post({ event: "command", func: "addEventListener", args: ["onReady"] });
+      post({ event: "command", func: "addEventListener", args: ["onStateChange"] });
+    };
+    iframe.addEventListener("load", subscribe);
+    subscribe();
+    const subInterval = setInterval(subscribe, 800);
+    setTimeout(() => clearInterval(subInterval), 8000);
+
+    window.addEventListener("message", (event) => {
+      if (event.source !== iframe.contentWindow) return;
+      let data = event.data;
+      if (typeof data === "string") {
+        try { data = JSON.parse(data); } catch { return; }
+      }
+      if (!data || data.event !== "infoDelivery" || !data.info) return;
+      if (typeof data.info.currentTime === "number") {
+        const ct = data.info.currentTime;
+        const second = Math.floor(ct * 2) / 2;
+        if (second !== videoState.lastSentSecond) {
+          videoState.lastSentSecond = second;
+          postToTop("time-update", { frameId: FRAME_ID, currentTime: ct });
+        }
+      }
+      if (typeof data.info.duration === "number" && data.info.duration > 0) {
+        videoState.duration = data.info.duration;
+      }
+    });
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data || data.source !== SOURCE || data.type !== "seek") return;
+      if (data.frameId && data.frameId !== FRAME_ID) return;
+      const seconds = Number(data.seconds);
+      if (!Number.isFinite(seconds)) return;
+      trace("seek", { seconds, target: "youtube" });
+      post({ event: "command", func: "seekTo", args: [Math.max(0, seconds), true] });
+      post({ event: "command", func: "playVideo", args: [] });
+    });
+
+    const tryDeliver = async () => {
+      for (const url of pendingCaptionUrls) {
+        const cues = await fetchCaptionApiCues(url);
+        if (cues.length) {
+          sendTranscriptReady(cues, "youtube-observed");
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (await tryDeliver()) return;
+    const deadline = Date.now() + 12000;
+    while (!transcriptSent && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await tryDeliver()) return;
+    }
+    if (!transcriptSent) postFrameStatus("no-cues", { src: iframe.src, kind: "youtube" });
   }
 
   async function collectCues(video) {
@@ -457,17 +541,19 @@
   }
 
   function sendTranscriptReady(cues, reason) {
-    if (!videoState?.video || transcriptSent || !cues.length) return;
+    if (!videoState || (!videoState.video && !videoState.iframe) || transcriptSent || !cues.length) return;
 
     transcriptSent = true;
     videoState.cues = cues;
+    const rawDuration = videoState.video?.duration ?? videoState.duration;
+    const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null;
     trace("cues-ready", { reason, count: cues.length, first: cues[0], last: cues[cues.length - 1] });
-    postFrameStatus("cues-ready", { reason, count: cues.length, duration: videoState.video.duration || null });
+    postFrameStatus("cues-ready", { reason, count: cues.length, duration });
     postToTop("transcript-ready", {
       frameId: FRAME_ID,
       title: document.title || ariaVideoTitle() || "Video transcript",
       cues,
-      duration: Number.isFinite(videoState.video.duration) ? videoState.video.duration : null
+      duration
     });
   }
 
@@ -479,7 +565,7 @@
     trace("caption-url-observed", { url });
     postFrameStatus("caption-url-observed", { url });
 
-    if (videoState?.video && !transcriptSent) {
+    if ((videoState?.video || videoState?.iframe) && !transcriptSent) {
       const cues = await fetchCaptionApiCues(url);
       sendTranscriptReady(cues, "observed-caption-api");
     }
